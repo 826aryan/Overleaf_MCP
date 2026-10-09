@@ -46,7 +46,7 @@ async def root_dashboard(request):
                 <span class="badge"><span class="status-indicator"></span>ONLINE</span>
             </h1>
             
-            <p style="color: #94a3b8; margin-bottom: 8px;">Claude MCP SSE Endpoint (Use this in Claude Web):</p>
+            <p style="color: #94a3b8; margin-bottom: 8px;">Claude MCP Streamable HTTP Endpoint (Use this in Claude Web):</p>
             <div class="endpoint-card">
                 <span id="sse-url">Loading...</span>
             </div>
@@ -70,8 +70,8 @@ async def root_dashboard(request):
         </div>
 
         <script>
-            const sseUrl = window.location.origin + '/sse';
-            document.getElementById('sse-url').innerText = sseUrl;
+            const mcpUrl = window.location.origin + '/mcp';
+            document.getElementById('sse-url').innerText = mcpUrl;
 
             async function testAuth() {
                 const btn = document.getElementById('btn-auth');

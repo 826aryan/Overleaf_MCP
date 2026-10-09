@@ -52,8 +52,11 @@ def main():
     if args.transport in ("sse", "streamable-http"):
         print(f"🌐 Host      : {args.host}")
         print(f"🔌 Port      : {args.port}")
-        print(f"📡 SSE URL   : http://{args.host}:{args.port}/sse")
-        print(f"💬 Messages  : http://{args.host}:{args.port}/messages/")
+        if args.transport == "streamable-http":
+            print(f"📡 Claude URL: http://{args.host}:{args.port}/mcp")
+        else:
+            print(f"📡 SSE URL   : http://{args.host}:{args.port}/sse")
+            print(f"💬 Messages  : http://{args.host}:{args.port}/messages/")
     print(f"🖥️  Headless  : {browser.headless}")
     print("=" * 60)
 
