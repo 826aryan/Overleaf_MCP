@@ -147,20 +147,27 @@ async def api_test_auth(request):
 async def api_test_project(request):
     """Direct API to open project and read LaTeX from browser dashboard."""
     from starlette.responses import JSONResponse
-    data = await request.json()
-    project_url = data.get("project_url", "")
-    open_res = await browser.open_project(project_url)
-    if not open_res.get("success"):
-        return JSONResponse(open_res)
-    latex_res = await browser.get_latex_content()
-    # Return summary + preview of LaTeX
-    full_latex = latex_res.get("latex") or ""
-    return JSONResponse({
-        "open_result": open_res,
-        "latex_success": latex_res.get("success"),
-        "line_count": len(full_latex.splitlines()),
-        "latex_preview": full_latex[:600] + ("\n... [truncated for display]" if len(full_latex) > 600 else "")
-    })
+    try:
+        data = await request.json()
+        project_url = data.get("project_url", "")
+        open_res = await browser.open_project(project_url)
+        if not open_res.get("success"):
+            return JSONResponse(open_res)
+        latex_res = await browser.get_latex_content()
+        full_latex = latex_res.get("latex") or ""
+        return JSONResponse({
+            "open_result": open_res,
+            "latex_success": latex_res.get("success"),
+            "line_count": len(full_latex.splitlines()),
+            "latex_preview": full_latex[:600] + ("\n... [truncated for display]" if len(full_latex) > 600 else "")
+        })
+    except Exception as e:
+        import traceback
+        return JSONResponse({
+            "success": False,
+            "error": str(e),
+            "traceback": traceback.format_exc()
+        }, status_code=200)
 
 # Global browser manager instance
 browser = OverleafBrowserManager(headless=HEADLESS)

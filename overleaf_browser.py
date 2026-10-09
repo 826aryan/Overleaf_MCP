@@ -27,28 +27,45 @@ class OverleafBrowserManager:
         if not self._playwright:
             self._playwright = await async_playwright().start()
 
+        chromium_args = [
+            "--no-sandbox",
+            "--disable-setuid-sandbox",
+            "--disable-dev-shm-usage",
+            "--disable-gpu",
+            "--disable-blink-features=AutomationControlled",
+        ]
+
         # 1. Check for simple session cookie (Zero-install deployment)
         session_cookie = os.getenv("OVERLEAF_SESSION_COOKIE")
         if session_cookie:
             browser_instance = await self._playwright.chromium.launch(
                 headless=self.headless,
-                args=[
-                    "--disable-blink-features=AutomationControlled",
-                    "--no-sandbox",
-                    "--disable-dev-shm-usage",
-                ]
+                args=chromium_args
             )
             self._context = await browser_instance.new_context(
                 viewport={"width": 1440, "height": 900},
                 accept_downloads=True,
             )
-            # Add session cookies directly
-            clean_cookie = session_cookie.strip()
-            cookies = [
-                {"name": "overleaf_session", "value": clean_cookie, "domain": ".overleaf.com", "path": "/", "secure": True},
-                {"name": "v1_session", "value": clean_cookie, "domain": ".overleaf.com", "path": "/", "secure": True}
-            ]
-            await self._context.add_cookies(cookies)
+            
+            # Robust cookie parser: strips whitespace, semicolons, quotes, handles key=value pairs
+            raw = session_cookie.strip('\"\' \n\r\t')
+            parsed_cookies = []
+            parts = [p.strip() for p in raw.split(';') if p.strip()]
+            for part in parts:
+                if '=' in part:
+                    k, v = part.split('=', 1)
+                    k, v = k.strip(), v.strip('\"\' \n\r\t')
+                    if k and v:
+                        parsed_cookies.append({'name': k, 'value': v, 'url': 'https://www.overleaf.com'})
+                else:
+                    v = part.strip('\"\' \n\r\t')
+                    if v:
+                        parsed_cookies.append({'name': 'overleaf_session', 'value': v, 'url': 'https://www.overleaf.com'})
+                        parsed_cookies.append({'name': 'v1_session', 'value': v, 'url': 'https://www.overleaf.com'})
+
+            if parsed_cookies:
+                await self._context.add_cookies(parsed_cookies)
+
             self._page = await self._context.new_page()
             return self._page
 
@@ -67,11 +84,7 @@ class OverleafBrowserManager:
         if state_file_path.exists():
             browser_instance = await self._playwright.chromium.launch(
                 headless=self.headless,
-                args=[
-                    "--disable-blink-features=AutomationControlled",
-                    "--no-sandbox",
-                    "--disable-dev-shm-usage",
-                ]
+                args=chromium_args
             )
             self._context = await browser_instance.new_context(
                 storage_state=str(state_file_path),
@@ -81,15 +94,11 @@ class OverleafBrowserManager:
             self._page = await self._context.new_page()
             return self._page
 
-        # Fallback to local persistent profile
+        # Fallback to persistent profile
         self._context = await self._playwright.chromium.launch_persistent_context(
             user_data_dir=str(OVERLEAF_PROFILE_DIR),
             headless=self.headless,
-            args=[
-                "--disable-blink-features=AutomationControlled",
-                "--no-sandbox",
-                "--disable-dev-shm-usage",
-            ],
+            args=chromium_args,
             viewport={"width": 1440, "height": 900},
             accept_downloads=True,
         )
@@ -101,15 +110,29 @@ class OverleafBrowserManager:
     async def check_auth_status(self) -> Dict[str, Any]:
         """Checks if the user has an active authenticated session on Overleaf."""
         async with self._lock:
-            page = await self._ensure_browser()
-            await page.goto("https://www.overleaf.com/project", wait_until="domcontentloaded", timeout=30000)
-            await asyncio.sleep(2)
-            url = page.url
-            if "/login" in url:
+            try:
+                page = await self._ensure_browser()
+                await page.goto("https://www.overleaf.com/project", wait_until="domcontentloaded", timeout=45000)
+                await asyncio.sleep(2)
+                url = page.url
+                if "/login" in url:
+                    return {
+                        "authenticated": False,
+                        "url": url,
+                        "message": "User is not logged in. Set OVERLEAF_STORAGE_STATE_B64 or OVERLEAF_SESSION_COOKIE in Railway Variables."
+                    }
+                return {
+                    "authenticated": True,
+                    "url": url,
+                    "message": "Authenticated successfully with Overleaf."
+                }
+            except Exception as e:
+                import traceback
                 return {
                     "authenticated": False,
-                    "url": url,
-                    "message": "User is not logged in. Please run `python setup_auth.py` to log in."
+                    "error": str(e),
+                    "traceback": traceback.format_exc(),
+                    "message": f"Browser navigation error: {e}"
                 }
             return {
                 "authenticated": True,
