@@ -86,8 +86,10 @@ class OverleafBrowserManager:
                 headless=self.headless,
                 args=chromium_args
             )
+            # Sanitize storage state: keep only overleaf cookies and fix invalid sameSite combos
+            sanitized_state = self._sanitize_storage_state(state_file_path)
             self._context = await browser_instance.new_context(
-                storage_state=str(state_file_path),
+                storage_state=sanitized_state,
                 viewport={"width": 1440, "height": 900},
                 accept_downloads=True,
             )
@@ -106,6 +108,48 @@ class OverleafBrowserManager:
         pages = self._context.pages
         self._page = pages[0] if pages else await self._context.new_page()
         return self._page
+
+    def _sanitize_storage_state(self, state_file_path: Path) -> Dict[str, Any]:
+        """
+        Reads storage_state.json and returns a sanitized dict safe for Playwright.
+        - Filters cookies to only overleaf.com domain
+        - Fixes invalid sameSite + secure combinations
+        - Ensures required cookie fields are present
+        """
+        import json
+        raw = json.loads(state_file_path.read_text(encoding="utf-8"))
+        
+        valid_same_sites = {"Strict", "Lax", "None"}
+        sanitized_cookies = []
+        
+        for cookie in raw.get("cookies", []):
+            domain = cookie.get("domain", "")
+            # Only keep Overleaf cookies
+            if "overleaf.com" not in domain:
+                continue
+            
+            # Ensure required fields exist
+            if not cookie.get("name") or cookie.get("value") is None:
+                continue
+
+            # Fix sameSite: "None" must have secure=true per spec
+            same_site = cookie.get("sameSite", "Lax")
+            if same_site not in valid_same_sites:
+                same_site = "Lax"
+            if same_site == "None":
+                cookie["secure"] = True
+            cookie["sameSite"] = same_site
+            
+            # Ensure domain+path present (Playwright requires either url or domain+path)
+            if not cookie.get("path"):
+                cookie["path"] = "/"
+            
+            sanitized_cookies.append(cookie)
+        
+        return {
+            "cookies": sanitized_cookies,
+            "origins": raw.get("origins", [])
+        }
 
     async def check_auth_status(self) -> Dict[str, Any]:
         """Checks if the user has an active authenticated session on Overleaf."""
