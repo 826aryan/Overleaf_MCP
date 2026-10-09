@@ -1,9 +1,9 @@
 import json
 from typing import Optional, Dict, Any
-from starlette.responses import HTMLResponse
+from starlette.responses import HTMLResponse, FileResponse
 from mcp.server.mcpserver import MCPServer
 from overleaf_browser import OverleafBrowserManager
-from config import HEADLESS
+from config import HEADLESS, OVERLEAF_OUTPUT_DIR
 
 # Initialize MCP server
 mcp = MCPServer(
@@ -11,6 +11,19 @@ mcp = MCPServer(
     version="1.0.0",
     description="MCP server connecting Claude to Overleaf to automate resume tailoring, LaTeX editing, compilation, and PDF retrieval."
 )
+
+@mcp.custom_route("/download/{filename}", methods=["GET"])
+async def download_file(request):
+    """Serve downloaded PDF files so users can click and download them from Claude."""
+    filename = request.path_params.get("filename")
+    file_path = OVERLEAF_OUTPUT_DIR / filename
+    if file_path.exists() and file_path.is_file():
+        return FileResponse(
+            path=str(file_path),
+            filename=filename,
+            media_type="application/pdf"
+        )
+    return HTMLResponse("<h3>File not found</h3>", status_code=404)
 
 @mcp.custom_route("/", methods=["GET"])
 async def root_dashboard(request):
@@ -220,10 +233,15 @@ async def overleaf_recompile(timeout_seconds: int = 35) -> str:
 @mcp.tool()
 async def overleaf_download_pdf(filename: Optional[str] = None) -> str:
     """
-    Download the freshly compiled PDF resume from Overleaf to the local machine.
-    Returns the absolute path to the saved PDF file.
+    Download the freshly compiled PDF resume from Overleaf to the server.
+    Returns the file name, download URL endpoint (/download/<filename>), and Overleaf build URL.
+    Claude should provide a clickable Markdown link in the chat so the user can download it with one click:
+    Example: [Download Tailored Resume PDF](/download/<filename>)
     """
     res = await browser.download_pdf(custom_filename=filename)
+    if res.get("success") and "file_name" in res:
+        res["server_download_path"] = f"/download/{res['file_name']}"
+        res["action_for_claude"] = f"Provide a clickable markdown link in your response: [Download Tailored Resume PDF](/download/{res['file_name']})"
     return json.dumps(res, indent=2)
 
 @mcp.tool()
