@@ -382,7 +382,7 @@ class OverleafBrowserManager:
             except Exception as e:
                 return {"success": False, "error": str(e)}
 
-    async def recompile(self, timeout_seconds: int = 35) -> Dict[str, Any]:
+    async def recompile(self, timeout_seconds: int = 40) -> Dict[str, Any]:
         """
         Triggers document recompile and waits for completion.
         Returns compile status (success or errors/warnings).
@@ -390,32 +390,42 @@ class OverleafBrowserManager:
         async with self._lock:
             page = await self._ensure_browser()
             try:
-                # Click Recompile button
-                recompile_btn = await page.query_selector(
-                    "button:has-text('Recompile'), button[aria-label*='Recompile' i], .btn-recompile, [data-tooltip*='Recompile' i]"
-                )
+                # 1. Click Recompile button using Playwright locator or keyboard shortcut
+                clicked = False
+                try:
+                    btn = page.locator("button:has-text('Recompile'), .btn-recompile, [aria-label*='Recompile' i]").first
+                    if await btn.is_visible(timeout=3000):
+                        await btn.click()
+                        clicked = True
+                except Exception:
+                    pass
 
-                if recompile_btn:
-                    await recompile_btn.click()
-                else:
-                    # Shortcut fallback: Meta+Enter or Ctrl+Enter
+                if not clicked:
+                    # Fallback shortcut: Ctrl+Enter or Cmd+Enter
                     is_mac = "mac" in (await page.evaluate("navigator.platform")).lower()
                     cmd_key = "Meta" if is_mac else "Control"
                     await page.keyboard.press(f"{cmd_key}+Enter")
 
+                # Wait 1.5s for compile process to start
+                await asyncio.sleep(1.5)
+
                 start_time = time.time()
                 compiling = True
-                
-                # Wait for compilation to finish (spinner gone, or button no longer disabled)
+
+                # Wait for compilation to complete (valid browser DOM check)
                 while compiling and (time.time() - start_time < timeout_seconds):
                     await asyncio.sleep(1)
                     compiling = await page.evaluate("""
                         () => {
-                            const btn = document.querySelector("button:has-text('Recompile'), .btn-recompile");
-                            if (btn && (btn.disabled || btn.classList.contains('compiling') || btn.innerText.includes('Compiling'))) {
+                            const buttons = Array.from(document.querySelectorAll('button, .btn'));
+                            const btn = buttons.find(b => {
+                                const t = (b.innerText || b.getAttribute('aria-label') || '').toLowerCase();
+                                return t.includes('recompile') || b.classList.contains('btn-recompile');
+                            });
+                            if (btn && (btn.disabled || btn.classList.contains('compiling') || btn.innerText.toLowerCase().includes('compiling'))) {
                                 return true;
                             }
-                            const spinner = document.querySelector(".fa-spinner, .loading-spinner, [aria-label*='Compiling']");
+                            const spinner = document.querySelector('.fa-spinner, .loading-spinner, [aria-label*=\"compiling\" i]');
                             return !!spinner;
                         }
                     """)
@@ -423,15 +433,14 @@ class OverleafBrowserManager:
                 # Collect compilation result (check for error modals, logs, or badge)
                 compile_info = await page.evaluate("""
                     () => {
-                        const errorBadge = document.querySelector(".btn-recompile-error, .badge-danger, [aria-label*='errors'], [aria-label*='warnings']");
+                        const errorBadge = document.querySelector('.btn-recompile-error, .badge-danger, [aria-label*=\"error\" i], [aria-label*=\"errors\" i]');
                         const errorCount = errorBadge ? errorBadge.innerText.trim() : null;
 
-                        // Check log entries if open or available
                         const logErrors = Array.from(document.querySelectorAll('.log-entry-message, .error-message, .alert-danger'))
                             .map(el => el.innerText.trim())
                             .filter(Boolean);
 
-                        const hasPdfViewer = !!document.querySelector('.pdf-viewer, #pdf-viewer, iframe[src*="pdf"]');
+                        const hasPdfViewer = !!document.querySelector('.pdf-viewer, #pdf-viewer, iframe[src*=\"pdf\"], canvas.pdf-page');
 
                         return {
                             has_pdf: hasPdfViewer,
@@ -441,7 +450,10 @@ class OverleafBrowserManager:
                     }
                 """)
 
-                has_errors = bool(compile_info.get("log_errors") or (compile_info.get("error_badge") and "error" in str(compile_info.get("error_badge")).lower()))
+                has_errors = bool(
+                    compile_info.get("log_errors") or 
+                    (compile_info.get("error_badge") and "error" in str(compile_info.get("error_badge")).lower())
+                )
 
                 return {
                     "success": not has_errors,
@@ -457,21 +469,44 @@ class OverleafBrowserManager:
     async def download_pdf(self, custom_filename: Optional[str] = None) -> Dict[str, Any]:
         """
         Downloads the compiled PDF from Overleaf and saves it locally.
+        Uses the dynamic build URL from the Overleaf viewer.
         """
         async with self._lock:
             page = await self._ensure_browser()
+            filename = custom_filename or f"resume_{int(time.time())}.pdf"
+            if not filename.endswith(".pdf"):
+                filename += ".pdf"
+            dest_path = OVERLEAF_OUTPUT_DIR / filename
+
             try:
-                # 1. Try finding download button
-                download_sel = "a[aria-label*='Download PDF' i], button[aria-label*='Download PDF' i], a[href*='output.pdf'], [data-tooltip*='Download PDF' i]"
-                btn = await page.query_selector(download_sel)
+                # 1. Extract dynamic output.pdf href from the Overleaf UI
+                pdf_href = await page.evaluate("""
+                    () => {
+                        const a = document.querySelector('a[href*="output.pdf"], a[aria-label*="Download PDF" i], a[download]');
+                        return a ? a.getAttribute('href') : null;
+                    }
+                """)
 
-                filename = custom_filename or f"resume_{int(time.time())}.pdf"
-                if not filename.endswith(".pdf"):
-                    filename += ".pdf"
-                dest_path = OVERLEAF_OUTPUT_DIR / filename
+                if pdf_href:
+                    full_url = f"https://www.overleaf.com{pdf_href}" if pdf_href.startswith('/') else pdf_href
+                    response = await page.context.request.get(full_url)
+                    if response.status == 200:
+                        body = await response.body()
+                        if len(body) > 1000 and body.startswith(b"%PDF"):
+                            dest_path.write_bytes(body)
+                            return {
+                                "success": True,
+                                "file_path": str(dest_path),
+                                "file_name": filename,
+                                "size_bytes": len(body),
+                                "message": f"PDF successfully downloaded to {dest_path}"
+                            }
 
-                if btn:
-                    async with page.expect_download(timeout=15000) as download_info:
+                # 2. UI button download fallback
+                download_sel = "a[aria-label*='Download PDF' i], a[href*='output.pdf']"
+                btn = page.locator(download_sel).first
+                if await btn.is_visible(timeout=3000):
+                    async with page.expect_download(timeout=10000) as download_info:
                         await btn.click()
                     download = await download_info.value
                     await download.save_as(str(dest_path))
@@ -479,26 +514,13 @@ class OverleafBrowserManager:
                         "success": True,
                         "file_path": str(dest_path),
                         "file_name": filename,
-                        "size_bytes": dest_path.stat().st_size
+                        "size_bytes": dest_path.stat().st_size,
+                        "message": f"PDF successfully downloaded to {dest_path}"
                     }
-
-                # 2. Direct URL fallback if project ID is known
-                if self._current_project_id:
-                    pdf_url = f"https://www.overleaf.com/project/{self._current_project_id}/output/output.pdf?compileGroup=standard"
-                    # Use page.request with existing cookies
-                    response = await page.context.request.get(pdf_url)
-                    if response.status == 200:
-                        dest_path.write_bytes(await response.body())
-                        return {
-                            "success": True,
-                            "file_path": str(dest_path),
-                            "file_name": filename,
-                            "size_bytes": dest_path.stat().st_size
-                        }
 
                 return {
                     "success": False,
-                    "error": "Could not trigger PDF download. Make sure the project is compiled first."
+                    "error": "Could not download PDF. The project may need to be recompiled first."
                 }
             except Exception as e:
                 return {"success": False, "error": str(e)}
