@@ -7,8 +7,7 @@ WORKDIR /app
 ENV PYTHONUNBUFFERED=1 \
     OVERLEAF_HEADLESS=true \
     MCP_HOST=0.0.0.0 \
-    MCP_PORT=8000 \
-    MCP_TRANSPORT=sse
+    MCP_TRANSPORT=streamable-http
 
 # Install dependencies
 COPY requirements.txt .
@@ -20,8 +19,8 @@ RUN playwright install chromium
 # Copy application files
 COPY . .
 
-# Expose port
+# Expose default port (Railway will map $PORT dynamically)
 EXPOSE 8000
 
-# Start MCP server with SSE transport
-CMD ["python3", "main.py", "--transport", "sse", "--host", "0.0.0.0", "--port", "8000"]
+# Start MCP server
+CMD ["python3", "main.py"]
