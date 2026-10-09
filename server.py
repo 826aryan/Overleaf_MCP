@@ -14,49 +14,140 @@ mcp = MCPServer(
 
 @mcp.custom_route("/", methods=["GET"])
 async def root_dashboard(request):
-    """Clean status and help dashboard when visiting the root URL."""
+    """Interactive dashboard for manually testing the Overleaf MCP server in the browser."""
     html_content = """
     <!DOCTYPE html>
     <html lang="en">
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Overleaf LaTeX MCP Server</title>
+        <title>Overleaf MCP Server - Test Console</title>
         <style>
-            body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0f172a; color: #f8fafc; margin: 0; padding: 40px 20px; display: flex; justify-content: center; }
-            .card { background: #1e293b; border-radius: 12px; padding: 32px; max-width: 650px; width: 100%; box-shadow: 0 10px 25px rgba(0,0,0,0.4); border: 1px solid #334155; }
-            h1 { margin-top: 0; color: #38bdf8; font-size: 24px; display: flex; align-items: center; gap: 10px; }
-            .badge { background: #10b981; color: #022c22; font-size: 12px; font-weight: bold; padding: 4px 10px; border-radius: 9999px; }
-            .info-box { background: #0f172a; border-left: 4px solid #38bdf8; padding: 14px 16px; margin: 20px 0; border-radius: 4px; font-family: monospace; font-size: 14px; word-break: break-all; }
-            ul { line-height: 1.8; color: #cbd5e1; }
-            code { background: #334155; padding: 2px 6px; border-radius: 4px; color: #f1f5f9; }
+            * { box-sizing: border-box; }
+            body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0f172a; color: #f8fafc; margin: 0; padding: 30px 20px; display: flex; justify-content: center; }
+            .container { max-width: 800px; width: 100%; background: #1e293b; border-radius: 12px; padding: 28px; box-shadow: 0 10px 30px rgba(0,0,0,0.5); border: 1px solid #334155; }
+            h1 { margin-top: 0; color: #38bdf8; font-size: 24px; display: flex; align-items: center; justify-content: space-between; }
+            .badge { background: #10b981; color: #022c22; font-size: 13px; font-weight: 700; padding: 4px 12px; border-radius: 9999px; }
+            .endpoint-card { background: #0f172a; border-left: 4px solid #38bdf8; padding: 14px 16px; margin: 18px 0; border-radius: 6px; font-family: monospace; font-size: 14px; word-break: break-all; }
+            .section { background: #0f172a; border-radius: 8px; padding: 18px; margin-top: 20px; border: 1px solid #334155; }
+            h2 { font-size: 16px; color: #94a3b8; margin-top: 0; text-transform: uppercase; letter-spacing: 0.05em; }
+            button { background: #2563eb; color: white; border: none; padding: 10px 18px; border-radius: 6px; font-weight: 600; cursor: pointer; transition: all 0.2s; }
+            button:hover { background: #1d4ed8; }
+            button:disabled { opacity: 0.5; cursor: not-allowed; }
+            input { width: 100%; padding: 10px 14px; background: #1e293b; border: 1px solid #475569; border-radius: 6px; color: white; font-size: 14px; margin-bottom: 12px; }
+            pre { background: #020617; padding: 14px; border-radius: 6px; overflow-x: auto; color: #38bdf8; font-size: 13px; max-height: 250px; }
+            .status-indicator { display: inline-block; width: 10px; height: 10px; border-radius: 50%; background: #10b981; margin-right: 8px; }
         </style>
     </head>
     <body>
-        <div class="card">
-            <h1>📄 Overleaf MCP Server <span class="badge">ONLINE</span></h1>
-            <p>Your Overleaf automation server is running and ready to handle requests from Claude.</p>
+        <div class="container">
+            <h1>
+                <span>📄 Overleaf MCP Server</span>
+                <span class="badge"><span class="status-indicator"></span>ONLINE</span>
+            </h1>
             
-            <p><strong>To connect to Claude Web or Claude Desktop:</strong></p>
-            <div class="info-box">
-                SSE Endpoint: <strong id="endpoint">/sse</strong>
+            <p style="color: #94a3b8; margin-bottom: 8px;">Claude MCP SSE Endpoint (Use this in Claude Web):</p>
+            <div class="endpoint-card">
+                <span id="sse-url">Loading...</span>
             </div>
 
-            <p><strong>Important:</strong> Claude expects the <code>/sse</code> path in the URL.</p>
-            <ul>
-                <li>Local connection: <code>http://127.0.0.1:8000/sse</code></li>
-                <li>Cloudflare tunnel: <code>https://&lt;your-tunnel&gt;.trycloudflare.com/sse</code></li>
-            </ul>
-            
-            <p><strong>Available Tools:</strong> <code>overleaf_status</code>, <code>overleaf_open_project</code>, <code>overleaf_get_latex</code>, <code>overleaf_set_latex</code>, <code>overleaf_recompile</code>, <code>overleaf_download_pdf</code>.</p>
+            <!-- Manual Test 1: Check Auth -->
+            <div class="section">
+                <h2>🧪 Test 1: Overleaf Login Status</h2>
+                <p style="color: #cbd5e1; font-size: 14px;">Verify that the persistent browser profile is authenticated into Overleaf.</p>
+                <button id="btn-auth" onclick="testAuth()">Check Overleaf Login Status</button>
+                <pre id="auth-output" style="display:none;"></pre>
+            </div>
+
+            <!-- Manual Test 2: Project Read -->
+            <div class="section">
+                <h2>🧪 Test 2: Live Project Read Test</h2>
+                <p style="color: #cbd5e1; font-size: 14px;">Enter an Overleaf project URL to test opening it and reading the LaTeX source code.</p>
+                <input type="text" id="project-url" placeholder="https://www.overleaf.com/project/6705f4..." />
+                <button id="btn-project" onclick="testProject()">Open & Read LaTeX</button>
+                <pre id="project-output" style="display:none;"></pre>
+            </div>
         </div>
+
         <script>
-            document.getElementById('endpoint').innerText = window.location.origin + '/sse';
+            const sseUrl = window.location.origin + '/sse';
+            document.getElementById('sse-url').innerText = sseUrl;
+
+            async function testAuth() {
+                const btn = document.getElementById('btn-auth');
+                const out = document.getElementById('auth-output');
+                btn.disabled = true;
+                btn.innerText = 'Checking...';
+                out.style.display = 'block';
+                out.innerText = 'Checking Overleaf session in browser...';
+                try {
+                    const res = await fetch('/api/test-auth');
+                    const data = await res.json();
+                    out.innerText = JSON.stringify(data, null, 2);
+                } catch(e) {
+                    out.innerText = 'Error: ' + e.message;
+                }
+                btn.disabled = false;
+                btn.innerText = 'Check Overleaf Login Status';
+            }
+
+            async function testProject() {
+                const input = document.getElementById('project-url').value.trim();
+                const btn = document.getElementById('btn-project');
+                const out = document.getElementById('project-output');
+                if (!input) {
+                    alert('Please enter an Overleaf project URL first.');
+                    return;
+                }
+                btn.disabled = true;
+                btn.innerText = 'Opening project...';
+                out.style.display = 'block';
+                out.innerText = 'Launching browser, navigating to Overleaf project and extracting LaTeX...';
+                try {
+                    const res = await fetch('/api/test-project', {
+                        method: 'POST',
+                        headers: {'Content-Type': 'application/json'},
+                        body: JSON.stringify({ project_url: input })
+                    });
+                    const data = await res.json();
+                    out.innerText = JSON.stringify(data, null, 2);
+                } catch(e) {
+                    out.innerText = 'Error: ' + e.message;
+                }
+                btn.disabled = false;
+                btn.innerText = 'Open & Read LaTeX';
+            }
         </script>
     </body>
     </html>
     """
     return HTMLResponse(html_content)
+
+@mcp.custom_route("/api/test-auth", methods=["GET"])
+async def api_test_auth(request):
+    """Direct API to test auth status from browser dashboard."""
+    from starlette.responses import JSONResponse
+    res = await browser.check_auth_status()
+    return JSONResponse(res)
+
+@mcp.custom_route("/api/test-project", methods=["POST"])
+async def api_test_project(request):
+    """Direct API to open project and read LaTeX from browser dashboard."""
+    from starlette.responses import JSONResponse
+    data = await request.json()
+    project_url = data.get("project_url", "")
+    open_res = await browser.open_project(project_url)
+    if not open_res.get("success"):
+        return JSONResponse(open_res)
+    latex_res = await browser.get_latex_content()
+    # Return summary + preview of LaTeX
+    full_latex = latex_res.get("latex") or ""
+    return JSONResponse({
+        "open_result": open_res,
+        "latex_success": latex_res.get("success"),
+        "line_count": len(full_latex.splitlines()),
+        "latex_preview": full_latex[:600] + ("\n... [truncated for display]" if len(full_latex) > 600 else "")
+    })
 
 # Global browser manager instance
 browser = OverleafBrowserManager(headless=HEADLESS)
