@@ -27,7 +27,32 @@ class OverleafBrowserManager:
         if not self._playwright:
             self._playwright = await async_playwright().start()
 
-        # Check for cloud storage state in environment or file
+        # 1. Check for simple session cookie (Zero-install deployment)
+        session_cookie = os.getenv("OVERLEAF_SESSION_COOKIE")
+        if session_cookie:
+            browser_instance = await self._playwright.chromium.launch(
+                headless=self.headless,
+                args=[
+                    "--disable-blink-features=AutomationControlled",
+                    "--no-sandbox",
+                    "--disable-dev-shm-usage",
+                ]
+            )
+            self._context = await browser_instance.new_context(
+                viewport={"width": 1440, "height": 900},
+                accept_downloads=True,
+            )
+            # Add session cookies directly
+            clean_cookie = session_cookie.strip()
+            cookies = [
+                {"name": "overleaf_session", "value": clean_cookie, "domain": ".overleaf.com", "path": "/", "secure": True},
+                {"name": "v1_session", "value": clean_cookie, "domain": ".overleaf.com", "path": "/", "secure": True}
+            ]
+            await self._context.add_cookies(cookies)
+            self._page = await self._context.new_page()
+            return self._page
+
+        # 2. Check for base64 storage state
         state_file_path = BASE_DIR / "storage_state.json"
         b64_env = os.getenv("OVERLEAF_STORAGE_STATE_B64")
         if b64_env and not state_file_path.exists():
