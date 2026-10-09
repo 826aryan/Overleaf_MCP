@@ -1,5 +1,6 @@
 import json
 from typing import Optional, Dict, Any
+from starlette.responses import HTMLResponse
 from mcp.server.mcpserver import MCPServer
 from overleaf_browser import OverleafBrowserManager
 from config import HEADLESS
@@ -10,6 +11,52 @@ mcp = MCPServer(
     version="1.0.0",
     description="MCP server connecting Claude to Overleaf to automate resume tailoring, LaTeX editing, compilation, and PDF retrieval."
 )
+
+@mcp.custom_route("/", methods=["GET"])
+async def root_dashboard(request):
+    """Clean status and help dashboard when visiting the root URL."""
+    html_content = """
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Overleaf LaTeX MCP Server</title>
+        <style>
+            body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0f172a; color: #f8fafc; margin: 0; padding: 40px 20px; display: flex; justify-content: center; }
+            .card { background: #1e293b; border-radius: 12px; padding: 32px; max-width: 650px; width: 100%; box-shadow: 0 10px 25px rgba(0,0,0,0.4); border: 1px solid #334155; }
+            h1 { margin-top: 0; color: #38bdf8; font-size: 24px; display: flex; align-items: center; gap: 10px; }
+            .badge { background: #10b981; color: #022c22; font-size: 12px; font-weight: bold; padding: 4px 10px; border-radius: 9999px; }
+            .info-box { background: #0f172a; border-left: 4px solid #38bdf8; padding: 14px 16px; margin: 20px 0; border-radius: 4px; font-family: monospace; font-size: 14px; word-break: break-all; }
+            ul { line-height: 1.8; color: #cbd5e1; }
+            code { background: #334155; padding: 2px 6px; border-radius: 4px; color: #f1f5f9; }
+        </style>
+    </head>
+    <body>
+        <div class="card">
+            <h1>📄 Overleaf MCP Server <span class="badge">ONLINE</span></h1>
+            <p>Your Overleaf automation server is running and ready to handle requests from Claude.</p>
+            
+            <p><strong>To connect to Claude Web or Claude Desktop:</strong></p>
+            <div class="info-box">
+                SSE Endpoint: <strong id="endpoint">/sse</strong>
+            </div>
+
+            <p><strong>Important:</strong> Claude expects the <code>/sse</code> path in the URL.</p>
+            <ul>
+                <li>Local connection: <code>http://127.0.0.1:8000/sse</code></li>
+                <li>Cloudflare tunnel: <code>https://&lt;your-tunnel&gt;.trycloudflare.com/sse</code></li>
+            </ul>
+            
+            <p><strong>Available Tools:</strong> <code>overleaf_status</code>, <code>overleaf_open_project</code>, <code>overleaf_get_latex</code>, <code>overleaf_set_latex</code>, <code>overleaf_recompile</code>, <code>overleaf_download_pdf</code>.</p>
+        </div>
+        <script>
+            document.getElementById('endpoint').innerText = window.location.origin + '/sse';
+        </script>
+    </body>
+    </html>
+    """
+    return HTMLResponse(html_content)
 
 # Global browser manager instance
 browser = OverleafBrowserManager(headless=HEADLESS)

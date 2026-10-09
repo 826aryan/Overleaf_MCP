@@ -5,7 +5,7 @@ import time
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 from playwright.async_api import async_playwright, BrowserContext, Page, Playwright
-from config import OVERLEAF_PROFILE_DIR, OVERLEAF_OUTPUT_DIR, HEADLESS
+from config import OVERLEAF_PROFILE_DIR, OVERLEAF_OUTPUT_DIR, HEADLESS, BASE_DIR
 
 class OverleafBrowserManager:
     """
@@ -20,19 +20,50 @@ class OverleafBrowserManager:
         self._lock = asyncio.Lock()
 
     async def _ensure_browser(self) -> Page:
-        """Initializes or returns existing persistent browser session."""
+        """Initializes or returns existing browser session supporting cloud deployment state."""
         if self._page and not self._page.is_closed():
             return self._page
 
         if not self._playwright:
             self._playwright = await async_playwright().start()
 
+        # Check for cloud storage state in environment or file
+        state_file_path = BASE_DIR / "storage_state.json"
+        b64_env = os.getenv("OVERLEAF_STORAGE_STATE_B64")
+        if b64_env and not state_file_path.exists():
+            import base64
+            try:
+                decoded = base64.b64decode(b64_env).decode("utf-8")
+                state_file_path.write_text(decoded, encoding="utf-8")
+            except Exception as e:
+                print(f"Warning: Failed to decode OVERLEAF_STORAGE_STATE_B64: {e}")
+
+        # If a storage_state.json exists (cloud deployment)
+        if state_file_path.exists():
+            browser_instance = await self._playwright.chromium.launch(
+                headless=self.headless,
+                args=[
+                    "--disable-blink-features=AutomationControlled",
+                    "--no-sandbox",
+                    "--disable-dev-shm-usage",
+                ]
+            )
+            self._context = await browser_instance.new_context(
+                storage_state=str(state_file_path),
+                viewport={"width": 1440, "height": 900},
+                accept_downloads=True,
+            )
+            self._page = await self._context.new_page()
+            return self._page
+
+        # Fallback to local persistent profile
         self._context = await self._playwright.chromium.launch_persistent_context(
             user_data_dir=str(OVERLEAF_PROFILE_DIR),
             headless=self.headless,
             args=[
                 "--disable-blink-features=AutomationControlled",
                 "--no-sandbox",
+                "--disable-dev-shm-usage",
             ],
             viewport={"width": 1440, "height": 900},
             accept_downloads=True,

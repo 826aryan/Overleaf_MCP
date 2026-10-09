@@ -2,6 +2,7 @@
 __pycache__/
 *.pyc
 browser_data/
+storage_state.json
 output/
 .env
 .DS_Store

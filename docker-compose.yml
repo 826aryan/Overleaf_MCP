@@ -1,0 +1,19 @@
+version: '3.8'
+
+services:
+  overleaf-mcp:
+    build: .
+    container_name: overleaf-mcp
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - MCP_HOST=0.0.0.0
+      - MCP_PORT=8000
+      - MCP_TRANSPORT=sse
+      - OVERLEAF_HEADLESS=true
+      # Provide base64 exported session state for cloud
+      - OVERLEAF_STORAGE_STATE_B64=${OVERLEAF_STORAGE_STATE_B64:-}
+    volumes:
+      - ./browser_data:/app/browser_data
+      - ./output:/app/output
