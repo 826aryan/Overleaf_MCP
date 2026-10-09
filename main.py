@@ -58,12 +58,16 @@ def main():
     print("=" * 60)
 
     try:
+        from mcp.server.transport_security import TransportSecuritySettings
+        # Allow requests from Cloudflare tunnels, ngrok, and cloud domains
+        security_settings = TransportSecuritySettings(enable_dns_rebinding_protection=False)
+
         if args.transport == "stdio":
             mcp.run("stdio")
         elif args.transport == "sse":
-            mcp.run("sse", host=args.host, port=args.port)
+            mcp.run("sse", host=args.host, port=args.port, transport_security=security_settings)
         elif args.transport == "streamable-http":
-            mcp.run("streamable-http", host=args.host, port=args.port)
+            mcp.run("streamable-http", host=args.host, port=args.port, transport_security=security_settings)
     except KeyboardInterrupt:
         print("\nShutting down Overleaf MCP Server...")
         sys.exit(0)
