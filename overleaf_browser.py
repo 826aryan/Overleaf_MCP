@@ -149,37 +149,43 @@ class OverleafBrowserManager:
         try:
             filename = await page.evaluate("""
                 () => {
-                    // Try file tree selected item
                     const activeTreeItem = document.querySelector('.file-tree-item.selected, [role="treeitem"][aria-selected="true"]');
                     if (activeTreeItem) {
+                        const match = activeTreeItem.innerText.match(/[a-zA-Z0-9_-]+\\.[a-zA-Z0-9]+/);
+                        if (match) return match[0];
                         return activeTreeItem.innerText.trim();
                     }
-                    // Try tab or header bar
                     const activeTab = document.querySelector('.editor-tabs .active, [data-testid="file-name"]');
                     if (activeTab) {
                         return activeTab.innerText.trim();
                     }
-                    return null;
+                    return 'main.tex';
                 }
             """)
             return filename
         except Exception:
-            return None
+            return "main.tex"
 
     async def list_files(self) -> Dict[str, Any]:
-        """Lists files in the project file tree."""
+        """Lists actual project files (main.tex, cls, etc.) in the project file tree."""
         async with self._lock:
             page = await self._ensure_browser()
             try:
                 files = await page.evaluate("""
                     () => {
-                        const items = Array.from(document.querySelectorAll('[role="treeitem"], .file-tree-item, .entity-name'));
+                        const fileTree = document.querySelector('.file-tree, [aria-label*="File tree" i]');
+                        const scope = fileTree || document;
+                        const items = Array.from(scope.querySelectorAll('.file-tree-item, .entity-name, [role="treeitem"]'));
                         const names = [];
                         for (const el of items) {
-                            const text = (el.innerText || el.getAttribute('aria-label') || '').trim();
-                            if (text && !names.includes(text) && !text.includes('\\n')) {
-                                names.push(text);
+                            const raw = (el.innerText || el.getAttribute('aria-label') || '').trim();
+                            const match = raw.match(/[a-zA-Z0-9_.-]+\\.(tex|cls|bib|sty|pdf|png|jpg|jpeg)/i);
+                            if (match && !names.includes(match[0])) {
+                                names.push(match[0]);
                             }
+                        }
+                        if (names.length === 0) {
+                            names.push('main.tex');
                         }
                         return names;
                     }
@@ -193,15 +199,13 @@ class OverleafBrowserManager:
         async with self._lock:
             page = await self._ensure_browser()
             try:
-                # Find and click tree item with matching text
                 selector = f"[role='treeitem']:has-text('{filename}'), .file-tree-item:has-text('{filename}')"
                 el = await page.query_selector(selector)
                 if not el:
-                    # Fallback case-insensitive
                     items = await page.query_selector_all("[role='treeitem'], .file-tree-item")
                     for item in items:
                         text = (await item.inner_text()).strip()
-                        if text.lower() == filename.lower():
+                        if filename.lower() in text.lower():
                             el = item
                             break
 
@@ -217,36 +221,37 @@ class OverleafBrowserManager:
     async def get_latex_content(self) -> Dict[str, Any]:
         """
         Retrieves the complete LaTeX content currently displayed in the editor.
-        Supports CodeMirror 6 and Ace Editor.
+        Directly queries CodeMirror 6 EditorView (cmContent.cmView) to avoid DOM virtualization truncation.
         """
         async with self._lock:
             page = await self._ensure_browser()
             try:
                 result = await page.evaluate("""
                     () => {
-                        // 1. Check CodeMirror 6 editor instance
-                        const cmEditorEl = document.querySelector('.cm-editor');
-                        if (cmEditorEl && cmEditorEl.cmView && cmEditorEl.cmView.view) {
-                            return {
-                                content: cmEditorEl.cmView.view.state.doc.toString(),
-                                engine: 'codemirror6-state'
-                            };
-                        }
-
-                        // 2. Check CodeMirror 6 DOM lines
+                        // 1. Check CodeMirror 6 on .cm-content (Overleaf modern editor view)
                         const cmContent = document.querySelector('.cm-content');
-                        if (cmContent) {
-                            const lines = Array.from(cmContent.querySelectorAll('.cm-line'));
-                            if (lines.length > 0) {
+                        if (cmContent && cmContent.cmView && cmContent.cmView.view) {
+                            const view = cmContent.cmView.view;
+                            if (view.state && view.state.doc) {
                                 return {
-                                    content: lines.map(l => l.innerText).join('\\n'),
-                                    engine: 'codemirror6-dom-lines'
+                                    content: view.state.doc.toString(),
+                                    lines: view.state.doc.lines,
+                                    engine: 'codemirror6-view'
                                 };
                             }
-                            return {
-                                content: cmContent.innerText,
-                                engine: 'codemirror6-innertext'
-                            };
+                        }
+
+                        // 2. Check CodeMirror 6 on .cm-editor
+                        const cmEditorEl = document.querySelector('.cm-editor');
+                        if (cmEditorEl && cmEditorEl.cmView && cmEditorEl.cmView.view) {
+                            const view = cmEditorEl.cmView.view;
+                            if (view.state && view.state.doc) {
+                                return {
+                                    content: view.state.doc.toString(),
+                                    lines: view.state.doc.lines,
+                                    engine: 'codemirror6-editor-view'
+                                };
+                            }
                         }
 
                         // 3. Check Ace Editor
@@ -254,24 +259,36 @@ class OverleafBrowserManager:
                         if (aceEl && window.ace) {
                             try {
                                 const editor = window.ace.edit(aceEl);
+                                const val = editor.getValue();
                                 return {
-                                    content: editor.getValue(),
+                                    content: val,
+                                    lines: val.split('\\n').length,
                                     engine: 'ace'
                                 };
                             } catch (e) {}
                         }
 
-                        // 4. Check textarea fallback
-                        const textarea = document.querySelector('textarea.cm-content, textarea');
-                        if (textarea && textarea.value) {
+                        // 4. CodeMirror DOM lines fallback
+                        if (cmContent) {
+                            const lines = Array.from(cmContent.querySelectorAll('.cm-line'));
+                            if (lines.length > 0) {
+                                const txt = lines.map(l => l.innerText).join('\\n');
+                                return {
+                                    content: txt,
+                                    lines: lines.length,
+                                    engine: 'codemirror6-dom-lines'
+                                };
+                            }
                             return {
-                                content: textarea.value,
-                                engine: 'textarea'
+                                content: cmContent.innerText,
+                                lines: cmContent.innerText.split('\\n').length,
+                                engine: 'codemirror6-innertext'
                             };
                         }
 
                         return {
                             content: null,
+                            lines: 0,
                             engine: 'not-found'
                         };
                     }
@@ -282,7 +299,7 @@ class OverleafBrowserManager:
                         "success": True,
                         "latex": result["content"],
                         "engine": result["engine"],
-                        "line_count": len(result["content"].splitlines())
+                        "line_count": result.get("lines", len(result["content"].splitlines()))
                     }
                 else:
                     return {
@@ -295,15 +312,25 @@ class OverleafBrowserManager:
     async def set_latex_content(self, latex_code: str) -> Dict[str, Any]:
         """
         Updates the editor with the new LaTeX code.
-        Uses CodeMirror 6 transaction dispatch or Ace Editor setValue, with keyboard fallback.
+        Dispatches full document replacement directly into CodeMirror 6 (cmContent.cmView).
         """
         async with self._lock:
             page = await self._ensure_browser()
             try:
-                # Attempt 1: Direct JS state update (cleanest and preserves undo stack/debounced sync)
                 update_result = await page.evaluate("""
                     (newContent) => {
-                        // 1. CodeMirror 6
+                        // 1. CodeMirror 6 on .cm-content
+                        const cmContent = document.querySelector('.cm-content');
+                        if (cmContent && cmContent.cmView && cmContent.cmView.view) {
+                            const view = cmContent.cmView.view;
+                            const currentLen = view.state.doc.length;
+                            view.dispatch({
+                                changes: { from: 0, to: currentLen, insert: newContent }
+                            });
+                            return { success: true, method: 'cm6_content_view_dispatch' };
+                        }
+
+                        // 2. CodeMirror 6 on .cm-editor
                         const cmEditorEl = document.querySelector('.cm-editor');
                         if (cmEditorEl && cmEditorEl.cmView && cmEditorEl.cmView.view) {
                             const view = cmEditorEl.cmView.view;
@@ -311,10 +338,10 @@ class OverleafBrowserManager:
                             view.dispatch({
                                 changes: { from: 0, to: currentLen, insert: newContent }
                             });
-                            return { success: true, method: 'cm6_view_dispatch' };
+                            return { success: true, method: 'cm6_editor_view_dispatch' };
                         }
 
-                        // 2. Ace Editor
+                        // 3. Ace Editor
                         const aceEl = document.querySelector('.ace_editor');
                         if (aceEl && window.ace) {
                             try {
@@ -329,23 +356,21 @@ class OverleafBrowserManager:
                 """, latex_code)
 
                 if update_result.get("success"):
-                    # Wait 1 second for Overleaf autosave debounce
-                    await asyncio.sleep(1.5)
+                    # Wait for Overleaf to debounce autosave
+                    await asyncio.sleep(2)
                     return {
                         "success": True,
                         "method": update_result.get("method"),
                         "message": "LaTeX content updated successfully."
                     }
 
-                # Attempt 2: Fallback using Playwright keyboard focus + select all + clipboard/insert_text
+                # Attempt 2: Keyboard typing fallback
                 editor_sel = ".cm-content, .cm-editor, .ace_editor"
                 await page.click(editor_sel)
-                # Select all
                 is_mac = "mac" in (await page.evaluate("navigator.platform")).lower()
                 cmd_key = "Meta" if is_mac else "Control"
                 await page.keyboard.press(f"{cmd_key}+A")
                 await asyncio.sleep(0.3)
-                # Insert text
                 await page.keyboard.insert_text(latex_code)
                 await asyncio.sleep(2)
 
