@@ -3,7 +3,7 @@ from typing import Optional, Dict, Any
 from starlette.responses import HTMLResponse, FileResponse
 from mcp.server.mcpserver import MCPServer
 from overleaf_browser import OverleafBrowserManager
-from config import HEADLESS, OVERLEAF_OUTPUT_DIR
+from config import HEADLESS, OVERLEAF_OUTPUT_DIR, PUBLIC_URL
 
 # Initialize MCP server
 mcp = MCPServer(
@@ -24,6 +24,15 @@ async def download_file(request):
             media_type="application/pdf"
         )
     return HTMLResponse("<h3>File not found</h3>", status_code=404)
+
+
+def _build_download_url(request, filename: str) -> str:
+    """Build the full absolute download URL, preferring PUBLIC_URL env var."""
+    if PUBLIC_URL:
+        return f"{PUBLIC_URL}/download/{filename}"
+    # Fallback: derive from the incoming request's base URL
+    base = str(request.base_url).rstrip("/") if request else ""
+    return f"{base}/download/{filename}" if base else f"/download/{filename}"
 
 @mcp.custom_route("/", methods=["GET"])
 async def root_dashboard(request):
@@ -241,14 +250,20 @@ async def overleaf_recompile(timeout_seconds: int = 35) -> str:
 async def overleaf_download_pdf(filename: Optional[str] = None) -> str:
     """
     Download the freshly compiled PDF resume from Overleaf to the server.
-    Returns the file name, download URL endpoint (/download/<filename>), and Overleaf build URL.
-    Claude should provide a clickable Markdown link in the chat so the user can download it with one click:
-    Example: [Download Tailored Resume PDF](/download/<filename>)
+    Returns the full download URL so the user can click it directly.
+    Claude MUST present the download_url as a clickable markdown link, e.g.:
+    [Download Resume PDF](<download_url>)
+    Do NOT modify or shorten the URL — use it exactly as returned.
     """
     res = await browser.download_pdf(custom_filename=filename)
     if res.get("success") and "file_name" in res:
-        res["server_download_path"] = f"/download/{res['file_name']}"
-        res["action_for_claude"] = f"Provide a clickable markdown link in your response: [Download Tailored Resume PDF](/download/{res['file_name']})"
+        full_url = _build_download_url(None, res["file_name"])
+        res["download_url"] = full_url
+        res["action_for_claude"] = (
+            f"Present this exact clickable link to the user: "
+            f"[Download Tailored Resume PDF]({full_url})  "
+            f"The URL is: {full_url}"
+        )
     return json.dumps(res, indent=2)
 
 @mcp.tool()
